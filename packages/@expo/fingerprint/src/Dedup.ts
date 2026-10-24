@@ -9,8 +9,38 @@ const debug = require('debug')('expo:fingerprint:Dedup');
  * Strip duplicated sources, mainly for duplicated file or dir
  */
 export function dedupSources(sources: HashSource[], projectRoot: string): HashSource[] {
+  // Use Maps for O(1) duplicate lookup on 'contents' and 'package' sources,
+  // avoiding O(N^2) linear searches when deduplicating fingerprint sources.
+  const contentsMap = new Map<string, HashSource>();
+  const packageMap = new Map<string, HashSource>();
   const newSources: HashSource[] = [];
+
   for (const source of sources) {
+    if (source.type === 'contents') {
+      const existing = contentsMap.get(source.id);
+      if (existing != null) {
+        debug(`Skipping duplicated source: ${JSON.stringify(source)}`);
+        existing.reasons.push(...source.reasons);
+      } else {
+        contentsMap.set(source.id, source);
+        newSources.push(source);
+      }
+      continue;
+    }
+
+    if (source.type === 'package') {
+      const key = source.overrideHashKey ?? `${source.name}@${source.version}`;
+      const existing = packageMap.get(key);
+      if (existing != null) {
+        debug(`Skipping duplicated source: ${JSON.stringify(source)}`);
+        existing.reasons.push(...source.reasons);
+      } else {
+        packageMap.set(key, source);
+        newSources.push(source);
+      }
+      continue;
+    }
+
     const [duplicatedItemIndex, shouldSwapSource] = findDuplicatedSourceIndex(
       newSources,
       source,
@@ -25,7 +55,7 @@ export function dedupSources(sources: HashSource[], projectRoot: string): HashSo
           reasons: [...source.reasons, ...duplicatedItem.reasons],
         };
       } else {
-        duplicatedItem.reasons = [...duplicatedItem.reasons, ...source.reasons];
+        duplicatedItem.reasons.push(...source.reasons);
       }
     } else {
       newSources.push(source);
@@ -43,32 +73,15 @@ export function mergeSourceWithReasons(dst: HashSource, src: HashSource): HashSo
 }
 
 /**
- * Find the duplicated `source` in `newSources`
+ * Find the duplicated `source` in `newSources` for file and dir types.
  * @return tuple of [duplicatedItemIndexInNewSources, shouldSwapSource]
  */
 function findDuplicatedSourceIndex(
   newSources: HashSource[],
-  source: HashSource,
+  source: HashSourceFile | HashSourceDir,
   projectRoot: string
 ): [number, boolean] {
   let shouldSwapSource = false;
-  if (source.type === 'contents') {
-    return [
-      newSources.findIndex((item) => item.type === source.type && item.id === source.id) ?? null,
-      shouldSwapSource,
-    ];
-  }
-  if (source.type === 'package') {
-    const key = source.overrideHashKey ?? `${source.name}@${source.version}`;
-    return [
-      newSources.findIndex(
-        (item) =>
-          item.type === 'package' &&
-          (item.overrideHashKey ?? `${item.name}@${item.version}`) === key
-      ) ?? null,
-      shouldSwapSource,
-    ];
-  }
 
   for (const [index, existingSource] of newSources.entries()) {
     if (existingSource.type === 'contents' || existingSource.type === 'package') {
