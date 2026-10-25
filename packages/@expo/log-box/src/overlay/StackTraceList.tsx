@@ -108,6 +108,8 @@ function List({
 
   React.useEffect(() => {
     const visibleItems = showCollapsed ? items : items.filter((item) => !item.isCollapsed);
+    // Optimization: create a Set of visible item IDs for O(1) lookups instead of O(M) Array.prototype.some linear scans per item
+    const visibleIds = new Set(visibleItems.map((item) => item.id));
 
     setDisplayItems((prev: DisplayItem[]): DisplayItem[] => {
       const prevIds = new Set(prev.map((d) => d.item.id));
@@ -115,7 +117,7 @@ function List({
         .filter((item) => !prevIds.has(item.id))
         .map((item) => ({ item, status: 'entering' }));
       const updatedPrev: DisplayItem[] = prev.map((d) => {
-        if (!visibleItems.some((item) => item.id === d.item.id)) {
+        if (!visibleIds.has(d.item.id)) {
           return { ...d, status: 'exiting' };
         }
         return d;
@@ -216,30 +218,34 @@ export function StackTraceList({
   // Unfortunately RN implementation ignores symbolication collapse flag and expands all frames of components stack.
   // https://github.com/facebook/react-native/blob/93ac7db54ead26da002abebb8f987f58b6be3a1d/packages/react-native/Libraries/LogBox/Data/LogBoxLog.js#L51
   const expandFirst = 4;
-  const stackTraceItems = stack.map((frame, index) => {
-    const { file, lineNumber } = frame;
-    const isLaunchable =
-      !isStackFileAnonymous(frame) &&
-      symbolicationStatus === 'COMPLETE' &&
-      file != null &&
-      lineNumber != null;
-    const isCollapsed =
-      type === 'component' && process.env.EXPO_DOM_HOST_OS !== 'web'
-        ? index >= expandFirst
-        : !!frame.collapse;
-    return {
-      id: index,
-      content: (
-        <StackTraceItem
-          key={index}
-          isLaunchable={isLaunchable}
-          frame={frame}
-          onPress={isLaunchable ? () => openFileInEditor(file, lineNumber) : undefined}
-        />
-      ),
-      isCollapsed,
-    };
-  });
+  // Optimization: Memoize stackTraceItems to avoid recreating items array and re-triggering List's useEffect on unrelated re-renders (e.g. window resize)
+  const stackTraceItems = React.useMemo(() => {
+    if (!stack) return [];
+    return stack.map((frame, index) => {
+      const { file, lineNumber } = frame;
+      const isLaunchable =
+        !isStackFileAnonymous(frame) &&
+        symbolicationStatus === 'COMPLETE' &&
+        file != null &&
+        lineNumber != null;
+      const isCollapsed =
+        type === 'component' && process.env.EXPO_DOM_HOST_OS !== 'web'
+          ? index >= expandFirst
+          : !!frame.collapse;
+      return {
+        id: index,
+        content: (
+          <StackTraceItem
+            key={index}
+            isLaunchable={isLaunchable}
+            frame={frame}
+            onPress={isLaunchable ? () => openFileInEditor(file, lineNumber) : undefined}
+          />
+        ),
+        isCollapsed,
+      };
+    });
+  }, [stack, symbolicationStatus, type]);
 
   return (
     <div className={styles.root}>
