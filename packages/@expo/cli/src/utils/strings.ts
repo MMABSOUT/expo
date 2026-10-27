@@ -9,7 +9,8 @@ export function joinWithCommasAnd(items: string[], limit: number | undefined = 1
     return '';
   }
 
-  const uniqueItems = items.filter((value, index, array) => array.indexOf(value) === index);
+  // Deduplicate items in O(N) time using Set instead of O(N^2) array.indexOf filter
+  const uniqueItems = Array.from(new Set(items));
 
   if (uniqueItems.length === 1) {
     return uniqueItems[0]!;
